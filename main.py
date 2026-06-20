@@ -252,16 +252,6 @@ class MonitorBrightnessApp:
         clear_log_btn = ttk.Button(log_btn_frame, text="清空日志", command=self.clear_log)
         clear_log_btn.pack(side=tk.LEFT)
 
-    def validate_brightness(self, value: str) -> bool:
-        """验证亮度输入"""
-        if value == "":
-            return True
-        try:
-            val = int(value)
-            return 0 <= val <= 100
-        except ValueError:
-            return False
-
     def refresh_monitors(self):
         """刷新显示器列表"""
         # 清理旧句柄，防止资源泄漏
