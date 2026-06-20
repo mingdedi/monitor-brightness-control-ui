@@ -60,6 +60,16 @@ class MonitorBrightnessApp:
         # 初始日志
         self.log("程序启动", "info")
 
+        # 窗口关闭时清理资源
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def on_closing(self):
+        """窗口关闭时清理显示器句柄"""
+        if self.monitors:
+            self.controller.cleanup_monitors(self.monitors)
+            self.monitors = []
+        self.root.destroy()
+
     def _setup_fonts(self):
         """设置字体渲染，优化高 DPI 显示"""
         # 启用字体平滑
@@ -254,6 +264,10 @@ class MonitorBrightnessApp:
 
     def refresh_monitors(self):
         """刷新显示器列表"""
+        # 清理旧句柄，防止资源泄漏
+        if self.monitors:
+            self.controller.cleanup_monitors(self.monitors)
+
         self.monitors = self.controller.get_monitor_handles()
 
         if not self.monitors:

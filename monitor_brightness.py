@@ -108,12 +108,12 @@ class MonitorController:
         self.DestroyPhysicalMonitors.restype = ctypes.wintypes.BOOL
     
     def get_monitor_handles(self) -> list:
-        """获取所有物理显示器的句柄和描述"""
+        """获取所有物理显示器的句柄和描述（纯函数，不修改实例状态）"""
         if not self._loaded and not self.load_dll():
             return []
-            
-        self.monitors = []
-        
+
+        monitors = []
+
         def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
             num_monitors = ctypes.wintypes.DWORD()
             if not self.GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, ctypes.byref(num_monitors)):
@@ -124,12 +124,12 @@ class MonitorController:
             local_array = (PHYSICAL_MONITOR * count)()
             if self.GetPhysicalMonitorsFromHMONITOR(hMonitor, count, local_array):
                 for i in range(count):
-                    self.monitors.append({
+                    monitors.append({
                         "handle": local_array[i].hPhysicalMonitor,
                         "description": local_array[i].szPhysicalMonitorDescription,
                     })
             return True
-        
+
         MONITORENUMPROC = ctypes.WINFUNCTYPE(
             ctypes.wintypes.BOOL,
             ctypes.wintypes.HMONITOR,
@@ -139,7 +139,7 @@ class MonitorController:
         )
         callback_func = MONITORENUMPROC(callback)
         ctypes.windll.user32.EnumDisplayMonitors(None, None, callback_func, 0)
-        return self.monitors
+        return monitors
     
     def set_brightness_for_monitor(self, handle, target_brightness: int) -> tuple:
         """设置指定显示器的亮度"""
@@ -208,28 +208,31 @@ class MonitorController:
                 "message": f"亮度百分比必须在 0-100 之间，当前值：{target_brightness_percent}"
             }
         
-        monitor_list = self.get_monitor_handles()
-        
-        if not monitor_list:
+        all_monitors = self.get_monitor_handles()
+
+        if not all_monitors:
             return {
                 "success": False,
                 "results": [],
                 "message": "未检测到任何支持 DDC/CI 的物理显示器"
             }
-        
+
         # 如果需要，过滤指定显示器
         if description:
-            monitor_list = [m for m in monitor_list if description in m['description']]
+            monitor_list = [m for m in all_monitors if description in m['description']]
             if not monitor_list:
+                self.cleanup_monitors(all_monitors)
                 return {
                     "success": False,
                     "results": [],
                     "message": f"未找到描述中包含 '{description}' 的显示器"
                 }
-        
+        else:
+            monitor_list = all_monitors
+
         results = []
         success_count = 0
-        
+
         try:
             for mon in monitor_list:
                 curr, min_val, max_val = self.get_current_brightness(mon["handle"])
@@ -240,11 +243,11 @@ class MonitorController:
                         "message": "无法读取亮度 (可能权限不足)"
                     })
                     continue
-                
+
                 # 计算实际亮度值
                 target = int((max_val - min_val) * target_brightness_percent / 100) + min_val
                 success, msg = self.set_brightness_for_monitor(mon["handle"], target)
-                
+
                 if success:
                     results.append({
                         "description": mon['description'],
@@ -258,14 +261,14 @@ class MonitorController:
                         "success": False,
                         "message": msg
                     })
-            
+
             return {
                 "success": success_count == len(monitor_list),
                 "results": results,
                 "message": f"操作完成。成功：{success_count}/{len(monitor_list)} 个显示器"
             }
         finally:
-            self.cleanup_monitors(monitor_list)
+            self.cleanup_monitors(all_monitors)
 
 
 # 全局控制器实例
@@ -409,9 +412,9 @@ def control_vcp_feature(vcp_code: int, vcp_name: str, target_percent: int,
             "message": f"{vcp_name}必须在 0-100 之间，当前值：{target_percent}"
         }
 
-    monitor_list = get_monitor_handles()
+    all_monitors = get_monitor_handles()
 
-    if not monitor_list:
+    if not all_monitors:
         return {
             "success": False,
             "results": [],
@@ -420,13 +423,16 @@ def control_vcp_feature(vcp_code: int, vcp_name: str, target_percent: int,
 
     # 如果需要，过滤指定显示器
     if description:
-        monitor_list = [m for m in monitor_list if description in m['description']]
+        monitor_list = [m for m in all_monitors if description in m['description']]
         if not monitor_list:
+            cleanup_monitors(all_monitors)
             return {
                 "success": False,
                 "results": [],
                 "message": f"未找到描述中包含 '{description}' 的显示器"
             }
+    else:
+        monitor_list = all_monitors
 
     results = []
     success_count = 0
@@ -466,7 +472,7 @@ def control_vcp_feature(vcp_code: int, vcp_name: str, target_percent: int,
             "message": f"操作完成。成功：{success_count}/{len(monitor_list)} 个显示器"
         }
     finally:
-        cleanup_monitors(monitor_list)
+        cleanup_monitors(all_monitors)
 
 
 def get_vcp_feature_percent(handle, vcp_code: int):
@@ -519,21 +525,24 @@ def get_contrast(description: Optional[str] = None) -> dict:
     返回:
         dict: 包含显示器对比度信息的字典
     """
-    monitor_list = get_monitor_handles()
+    all_monitors = get_monitor_handles()
 
-    if not monitor_list:
+    if not all_monitors:
         return {
             "success": False,
             "message": "未检测到任何支持 DDC/CI 的物理显示器"
         }
 
     if description:
-        monitor_list = [m for m in monitor_list if description in m['description']]
+        monitor_list = [m for m in all_monitors if description in m['description']]
         if not monitor_list:
+            cleanup_monitors(all_monitors)
             return {
                 "success": False,
                 "message": f"未找到描述中包含 '{description}' 的显示器"
             }
+    else:
+        monitor_list = all_monitors
 
     results = []
     try:
@@ -558,7 +567,7 @@ def get_contrast(description: Optional[str] = None) -> dict:
             "monitors": results
         }
     finally:
-        cleanup_monitors(monitor_list)
+        cleanup_monitors(all_monitors)
 
 
 # --- RGB 增益控制 ---
@@ -615,21 +624,24 @@ def get_gain(color: str, description: Optional[str] = None) -> dict:
         }
 
     vcp_code, vcp_name = color_map[color]
-    monitor_list = get_monitor_handles()
+    all_monitors = get_monitor_handles()
 
-    if not monitor_list:
+    if not all_monitors:
         return {
             "success": False,
             "message": "未检测到任何支持 DDC/CI 的物理显示器"
         }
 
     if description:
-        monitor_list = [m for m in monitor_list if description in m['description']]
+        monitor_list = [m for m in all_monitors if description in m['description']]
         if not monitor_list:
+            cleanup_monitors(all_monitors)
             return {
                 "success": False,
                 "message": f"未找到描述中包含 '{description}' 的显示器"
             }
+    else:
+        monitor_list = all_monitors
 
     results = []
     try:
@@ -654,7 +666,7 @@ def get_gain(color: str, description: Optional[str] = None) -> dict:
             "monitors": results
         }
     finally:
-        cleanup_monitors(monitor_list)
+        cleanup_monitors(all_monitors)
 
 
 def get_all_gains(description: Optional[str] = None) -> dict:
@@ -667,21 +679,24 @@ def get_all_gains(description: Optional[str] = None) -> dict:
     返回:
         dict: 包含显示器所有增益信息的字典
     """
-    monitor_list = get_monitor_handles()
+    all_monitors = get_monitor_handles()
 
-    if not monitor_list:
+    if not all_monitors:
         return {
             "success": False,
             "message": "未检测到任何支持 DDC/CI 的物理显示器"
         }
 
     if description:
-        monitor_list = [m for m in monitor_list if description in m['description']]
+        monitor_list = [m for m in all_monitors if description in m['description']]
         if not monitor_list:
+            cleanup_monitors(all_monitors)
             return {
                 "success": False,
                 "message": f"未找到描述中包含 '{description}' 的显示器"
             }
+    else:
+        monitor_list = all_monitors
 
     results = []
     try:
@@ -722,7 +737,7 @@ def get_all_gains(description: Optional[str] = None) -> dict:
             "monitors": results
         }
     finally:
-        cleanup_monitors(monitor_list)
+        cleanup_monitors(all_monitors)
 
 
 if __name__ == "__main__":
