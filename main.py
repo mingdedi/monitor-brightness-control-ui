@@ -225,10 +225,7 @@ class MonitorBrightnessApp:
         test_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
 
         test_current_btn = ttk.Button(test_frame, text="查询当前亮度", command=self.query_current_brightness)
-        test_current_btn.grid(row=0, column=0, padx=(0, 10))
-
-        test_apply_btn = ttk.Button(test_frame, text="应用并测试", command=self.apply_and_test)
-        test_apply_btn.grid(row=0, column=1)
+        test_current_btn.grid(row=0, column=0)
 
         # 日志区域
         log_frame = ttk.LabelFrame(main_frame, text="日志", padding="10")
@@ -385,10 +382,6 @@ class MonitorBrightnessApp:
             for r in result.get("results", []):
                 status = "success" if r.get("success") else "error"
                 self.log(f"  - {r['description']}: {r['message']}", status)
-
-    def apply_and_test(self):
-        """应用设置并测试"""
-        self.save_brightness()
 
 
 def main():
