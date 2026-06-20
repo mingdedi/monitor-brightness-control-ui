@@ -298,8 +298,10 @@ class MonitorBrightnessApp:
         self.config["brightness"] = brightness
         self.save_config()
 
-        # 应用亮度
-        result = self.controller.control_monitor_brightness(brightness, self.selected_monitor_desc)
+        # 应用亮度（复用已有句柄，避免重复获取导致句柄失效）
+        result = self.controller.control_monitor_brightness(
+            brightness, self.selected_monitor_desc, monitors=self.monitors
+        )
         if result["success"]:
             self.status_label.config(text=f"智能调节亮度为 {brightness}%", foreground="green")
             self.log(f"自动设置亮度：{brightness}%", "success")

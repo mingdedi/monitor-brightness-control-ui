@@ -194,13 +194,15 @@ class MonitorController:
                 pass
 
     def control_monitor_brightness(self, target_brightness_percent: int,
-                                   description: Optional[str] = None) -> dict:
+                                   description: Optional[str] = None,
+                                   monitors: Optional[list] = None) -> dict:
         """
         控制显示器亮度
 
         参数:
             target_brightness_percent (int): 目标亮度百分比 (0-100)
             description (str, optional): 显示器描述关键字，None 表示控制所有显示器
+            monitors (list, optional): 已获取的显示器句柄列表，传入时复用而非重新获取
 
         返回:
             dict: 包含操作结果的字典
@@ -212,7 +214,8 @@ class MonitorController:
                 "message": f"亮度百分比必须在 0-100 之间，当前值：{target_brightness_percent}"
             }
 
-        all_monitors = self.get_monitor_handles()
+        own_handles = monitors is None
+        all_monitors = monitors if monitors else self.get_monitor_handles()
 
         if not all_monitors:
             return {
@@ -223,7 +226,7 @@ class MonitorController:
 
         if description:
             monitor_list = [m for m in all_monitors if description in m['description']]
-            if not monitor_list:
+            if not monitor_list and own_handles:
                 self.cleanup_monitors(all_monitors)
                 return {
                     "success": False,
@@ -270,7 +273,8 @@ class MonitorController:
                 "message": f"操作完成。成功：{success_count}/{len(monitor_list)} 个显示器"
             }
         finally:
-            self.cleanup_monitors(all_monitors)
+            if own_handles:
+                self.cleanup_monitors(all_monitors)
 
     # --- VCP 功能 ---
 
