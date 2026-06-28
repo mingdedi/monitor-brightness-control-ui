@@ -4,7 +4,9 @@ version = "1.0.0"
 description = "基于 DDC/CI 协议的显示器亮度控制 UI 程序"
 readme = "README.md"
 requires-python = ">=3.8"
-dependencies = []
+dependencies = [
+    "matplotlib>=3.7.5",
+]
 
 [tool.uv]
 dev-dependencies = []

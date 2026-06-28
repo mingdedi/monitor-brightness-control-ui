@@ -155,7 +155,7 @@ class MonitorBrightnessApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(5, weight=1)
+        main_frame.rowconfigure(4, weight=1)
 
         # 显示器选择区域
         monitor_frame = ttk.LabelFrame(main_frame, text="选择显示器", padding="10")
@@ -220,16 +220,9 @@ class MonitorBrightnessApp:
         self.status_label = ttk.Label(main_frame, text="", foreground="green")
         self.status_label.grid(row=3, column=0, columnspan=2, pady=(10, 0))
 
-        # 测试按钮区域
-        test_frame = ttk.LabelFrame(main_frame, text="测试", padding="10")
-        test_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
-
-        test_current_btn = ttk.Button(test_frame, text="查询当前亮度", command=self.query_current_brightness)
-        test_current_btn.grid(row=0, column=0)
-
         # 日志区域
         log_frame = ttk.LabelFrame(main_frame, text="日志", padding="10")
-        log_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        log_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
