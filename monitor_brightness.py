@@ -179,6 +179,34 @@ class MonitorController:
             return cur_bright.value, min_bright.value, max_bright.value
         return None, None, None
 
+    def set_brightness_percent(self, handle, target_brightness_percent: int) -> tuple:
+        """
+        按百分比设置指定显示器的亮度（基于该显示器自身量程换算）
+
+        返回:
+            tuple: (成功标志，消息)
+        """
+        if not 0 <= target_brightness_percent <= 100:
+            return False, f"亮度百分比必须在 0-100 之间，当前值：{target_brightness_percent}"
+
+        min_bright = ctypes.wintypes.DWORD()
+        cur_bright = ctypes.wintypes.DWORD()
+        max_bright = ctypes.wintypes.DWORD()
+
+        if not self.GetMonitorBrightness(handle, ctypes.byref(min_bright),
+                                         ctypes.byref(cur_bright),
+                                         ctypes.byref(max_bright)):
+            return False, "无法读取亮度 (该显示器可能不支持 DDC/CI)"
+
+        target = int((max_bright.value - min_bright.value) * target_brightness_percent / 100) + min_bright.value
+        target = max(min_bright.value, min(max_bright.value, target))
+
+        if self.SetMonitorBrightness(handle, target):
+            return True, f"亮度已设置为 {target} (范围：{min_bright.value}-{max_bright.value})"
+        else:
+            err = ctypes.get_last_error()
+            return False, f"设置亮度失败 (Error Code: {err})"
+
     def cleanup_monitors(self, monitors: list):
         """销毁物理显示器句柄，防止资源泄漏"""
         if not self._loaded:

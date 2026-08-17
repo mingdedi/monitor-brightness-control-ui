@@ -51,14 +51,11 @@ class MonitorBrightnessApp:
         # 创建界面
         self.create_widgets()
 
-        # 刷新显示器列表
-        self.refresh_monitors()
-
-        # 根据历史习惯自动调节亮度
-        self.auto_adjust_brightness()
-
         # 初始日志
         self.log("程序启动", "info")
+
+        # 刷新显示器列表
+        self.refresh_monitors()
 
         # 窗口关闭时清理资源
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -216,6 +213,10 @@ class MonitorBrightnessApp:
         save_btn = ttk.Button(setting_frame, text="保存", command=self.save_brightness)
         save_btn.grid(row=0, column=2, padx=(10, 0))
 
+        # 智能调节按钮
+        auto_btn = ttk.Button(setting_frame, text="智能调节", command=self.auto_adjust_brightness)
+        auto_btn.grid(row=0, column=3, padx=(10, 0))
+
         # 状态标签
         self.status_label = ttk.Label(main_frame, text="", foreground="green")
         self.status_label.grid(row=3, column=0, columnspan=2, pady=(10, 0))
@@ -248,15 +249,48 @@ class MonitorBrightnessApp:
         if self.monitors:
             self.controller.cleanup_monitors(self.monitors)
 
-        self.monitors = self.controller.get_monitor_handles()
+        all_monitors = self.controller.get_monitor_handles()
 
-        if not self.monitors:
+        if not all_monitors:
             self.monitor_combo["values"] = ["未检测到支持 DDC/CI 的显示器"]
             self.monitor_var.set("未检测到支持 DDC/CI 的显示器")
             self.selected_monitor_desc = None
             self.brightness_label.config(text="无显示器")
             self.log("未检测到支持 DDC/CI 的显示器", "warning")
             return
+
+        # 探测亮度读取能力，剔除不支持 DDC/CI 亮度控制的显示器
+        usable_monitors = []
+        skipped = 0
+        for m in all_monitors:
+            cur, _, _ = self.controller.get_current_brightness(m["handle"])
+            if cur is None:
+                self.controller.cleanup_monitors([m])
+                skipped += 1
+            else:
+                usable_monitors.append(m)
+        self.monitors = usable_monitors
+
+        if skipped:
+            self.log(f"跳过 {skipped} 个不支持 DDC/CI 亮度控制的显示器", "warning")
+
+        if not self.monitors:
+            self.monitor_combo["values"] = ["未检测到支持 DDC/CI 的显示器"]
+            self.monitor_var.set("未检测到支持 DDC/CI 的显示器")
+            self.selected_monitor_desc = None
+            self.brightness_label.config(text="无显示器")
+            self.log("所有显示器均不支持 DDC/CI 亮度控制", "warning")
+            return
+
+        # 多台显示器描述相同时追加序号，保证下拉框中可区分、按描述匹配时只命中一台
+        desc_counts = {}
+        for m in self.monitors:
+            desc_counts[m["description"]] = desc_counts.get(m["description"], 0) + 1
+        seen_counts = {}
+        for m in self.monitors:
+            if desc_counts[m["description"]] > 1:
+                seen_counts[m["description"]] = seen_counts.get(m["description"], 0) + 1
+                m["description"] = f"{m['description']} #{seen_counts[m['description']]}"
 
         # 更新下拉框
         monitor_descriptions = [m["description"] for m in self.monitors]
@@ -291,20 +325,22 @@ class MonitorBrightnessApp:
         self.config["brightness"] = brightness
         self.save_config()
 
-        # 应用亮度（复用已有句柄，避免重复获取导致句柄失效）
-        result = self.controller.control_monitor_brightness(
-            brightness, self.selected_monitor_desc, monitors=self.monitors
-        )
-        if result["success"]:
+        # 应用亮度（直接操作选中显示器的句柄，避免按描述匹配到多台）
+        handle = self.get_selected_monitor_handle()
+        if handle is None:
+            self.status_label.config(text="智能调节失败", foreground="red")
+            self.log("自动亮度设置失败：未找到选中显示器的句柄", "error")
+            return
+
+        success, msg = self.controller.set_brightness_percent(handle, brightness)
+        if success:
             self.status_label.config(text=f"智能调节亮度为 {brightness}%", foreground="green")
             self.log(f"自动设置亮度：{brightness}%", "success")
             self.query_current_brightness()
         else:
             self.status_label.config(text="智能调节失败", foreground="red")
             self.log("自动亮度设置失败", "error")
-            for r in result.get("results", []):
-                status = "success" if r.get("success") else "error"
-                self.log(f"  - {r['description']}: {r['message']}", status)
+            self.log(f"  - {self.selected_monitor_desc}: {msg}", "error")
 
     def on_monitor_selected(self, event):
         """显示器选择变化时的处理"""
@@ -358,25 +394,21 @@ class MonitorBrightnessApp:
         self.config["brightness"] = brightness
         self.save_config()
 
-        # 应用亮度
+        # 应用亮度（直接操作选中显示器的句柄，避免按描述匹配到多台）
         self.log(f"开始设置亮度：{brightness}%", "info")
-        result = self.controller.control_monitor_brightness(brightness, self.selected_monitor_desc)
+        success, msg = self.controller.set_brightness_percent(handle, brightness)
 
-        if result["success"]:
+        if success:
             self.status_label.config(text=f"亮度已设置为 {brightness}%", foreground="green")
             self.query_current_brightness()
             self.log(f"亮度设置成功：{brightness}%", "success")
-            for r in result.get("results", []):
-                status = "success" if r.get("success") else "error"
-                self.log(f"  - {r['description']}: {r['message']}", status)
+            self.log(f"  - {self.selected_monitor_desc}: {msg}", "success")
             # 记录历史
             self.record_history(brightness, self.selected_monitor_desc)
         else:
             self.status_label.config(text="设置失败", foreground="red")
             self.log("亮度设置失败", "error")
-            for r in result.get("results", []):
-                status = "success" if r.get("success") else "error"
-                self.log(f"  - {r['description']}: {r['message']}", status)
+            self.log(f"  - {self.selected_monitor_desc}: {msg}", "error")
 
 
 def main():
