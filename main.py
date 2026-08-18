@@ -309,6 +309,30 @@ class MonitorBrightnessApp:
         # 查询当前亮度
         self.query_current_brightness()
 
+    def apply_brightness(self, brightness: int) -> tuple:
+        """
+        应用亮度到选中的显示器
+
+        显示拓扑变化（如合盖关闭内屏、插拔显示器）会使已持有的句柄失效，
+        此时重新枚举显示器并重试一次。
+
+        返回:
+            tuple: (成功标志，消息)
+        """
+        handle = self.get_selected_monitor_handle()
+        if handle is not None:
+            success, msg = self.controller.set_brightness_percent(handle, brightness)
+            if success:
+                return True, msg
+            self.log(f"  - {self.selected_monitor_desc}: {msg}", "error")
+
+        self.log("显示器句柄可能已失效，重新枚举后重试", "warning")
+        self.refresh_monitors()
+        handle = self.get_selected_monitor_handle()
+        if handle is None:
+            return False, "未找到可用的显示器句柄"
+        return self.controller.set_brightness_percent(handle, brightness)
+
     def auto_adjust_brightness(self):
         """根据历史使用习惯自动调节亮度（不记录到 history.log）"""
         if not self.selected_monitor_desc:
@@ -325,14 +349,8 @@ class MonitorBrightnessApp:
         self.config["brightness"] = brightness
         self.save_config()
 
-        # 应用亮度（直接操作选中显示器的句柄，避免按描述匹配到多台）
-        handle = self.get_selected_monitor_handle()
-        if handle is None:
-            self.status_label.config(text="智能调节失败", foreground="red")
-            self.log("自动亮度设置失败：未找到选中显示器的句柄", "error")
-            return
-
-        success, msg = self.controller.set_brightness_percent(handle, brightness)
+        # 应用亮度（句柄失效时自动重新枚举重试）
+        success, msg = self.apply_brightness(brightness)
         if success:
             self.status_label.config(text=f"智能调节亮度为 {brightness}%", foreground="green")
             self.log(f"自动设置亮度：{brightness}%", "success")
@@ -383,20 +401,15 @@ class MonitorBrightnessApp:
 
     def save_brightness(self):
         """保存并应用亮度设置"""
-        handle = self.get_selected_monitor_handle()
-        if handle is None:
-            self.log("请先选择显示器", "warning")
-            return
-
         brightness = self.brightness_var.get()
 
         # 保存配置
         self.config["brightness"] = brightness
         self.save_config()
 
-        # 应用亮度（直接操作选中显示器的句柄，避免按描述匹配到多台）
+        # 应用亮度（句柄失效时自动重新枚举重试）
         self.log(f"开始设置亮度：{brightness}%", "info")
-        success, msg = self.controller.set_brightness_percent(handle, brightness)
+        success, msg = self.apply_brightness(brightness)
 
         if success:
             self.status_label.config(text=f"亮度已设置为 {brightness}%", foreground="green")
