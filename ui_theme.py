@@ -94,35 +94,48 @@ def set_titlebar_theme(root, theme: str):
 
     仅 Windows 10 1809+ 生效，旧系统或调用失败时保持系统默认，静默忽略。
     设置属性后需 SWP_FRAMECHANGED 触发非客户区重绘才会立即生效。
+
+    窗口首次显示前，Tk 尚未创建承载标题栏的顶层包装窗口（GetParent 返回 0），
+    此时设置属性无效，因此延迟到窗口映射后自动执行。
     """
     if sys.platform != "win32":
         return
-    try:
-        import ctypes
-        from ctypes import wintypes
 
-        hwnd = wintypes.HWND(ctypes.windll.user32.GetParent(root.winfo_id()) or int(root.frame(), 16))
-        value = ctypes.c_int(1 if theme == THEME_DARK else 0)
-        # 属性 20 为新版 DWMWA_USE_IMMERSIVE_DARK_MODE，部分旧版本构建为 19
-        applied = False
-        for attr in (20, 19):
-            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, wintypes.DWORD(attr), ctypes.byref(value), ctypes.sizeof(value)
-            ) == 0:
-                applied = True
-                break
-        if applied:
-            SWP_FRAMECHANGED = 0x20
-            SWP_NOSIZE = 0x1
-            SWP_NOMOVE = 0x2
-            SWP_NOZORDER = 0x4
-            SWP_NOACTIVATE = 0x10
-            ctypes.windll.user32.SetWindowPos(
-                hwnd, 0, 0, 0, 0, 0,
-                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-            )
-    except Exception:
-        pass
+    def _apply():
+        try:
+            if not root.winfo_ismapped():
+                root.after(30, _apply)
+                return
+        except tk.TclError:
+            return  # 窗口已销毁
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = wintypes.HWND(ctypes.windll.user32.GetParent(root.winfo_id()) or int(root.frame(), 16))
+            value = ctypes.c_int(1 if theme == THEME_DARK else 0)
+            # 属性 20 为新版 DWMWA_USE_IMMERSIVE_DARK_MODE，部分旧版本构建为 19
+            applied = False
+            for attr in (20, 19):
+                if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, wintypes.DWORD(attr), ctypes.byref(value), ctypes.sizeof(value)
+                ) == 0:
+                    applied = True
+                    break
+            if applied:
+                SWP_FRAMECHANGED = 0x20
+                SWP_NOSIZE = 0x1
+                SWP_NOMOVE = 0x2
+                SWP_NOZORDER = 0x4
+                SWP_NOACTIVATE = 0x10
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, 0, 0, 0, 0, 0,
+                    SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                )
+        except Exception:
+            pass
+
+    _apply()
 
 
 def configure_ttk(root, colors: dict):
