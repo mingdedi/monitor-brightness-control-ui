@@ -10,6 +10,7 @@
 - 点击保存按钮应用亮度设置
 - 查询当前显示器亮度
 - 配置文件保存上次设置
+- **界面主题**：跟随系统深浅色设置自动切换深色/浅色界面（含窗口标题栏），也可手动选择；默认跟随系统
 - **智能亮度调节**：根据 history.log 中的历史记录，按时间段加权预测当前应有亮度，启动时自动应用
 - 手动调节亮度会记录到 history.log，持续优化预测精度
 
@@ -129,8 +130,9 @@ uv run python brightness_predictor.py
 | `main.py` | 主程序入口，tkinter UI 界面 |
 | `monitor_brightness.py` | DDC/CI 亮度控制底层模块 |
 | `brightness_predictor.py` | 亮度预测模块，基于历史记录加权预测 |
+| `ui_theme.py` | 界面主题模块：深浅色配色、Windows 系统主题检测与标题栏跟随 |
 | `analyze_history.py` | 历史数据分析脚本，按时间段统计亮度分布 |
-| `config.json` | 配置文件（亮度、上次选择的显示器） |
+| `config.json` | 配置文件（亮度、上次选择的显示器、界面主题模式） |
 | `history.log` | 亮度操作历史日志 |
 | `run.bat` | 一键运行脚本 |
 

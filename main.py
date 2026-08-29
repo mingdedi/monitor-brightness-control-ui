@@ -12,9 +12,23 @@ from typing import Optional
 
 from monitor_brightness import MonitorController
 from brightness_predictor import predict_brightness
+from ui_theme import (
+    DARK_COLORS,
+    LIGHT_COLORS,
+    THEME_DARK,
+    THEME_LIGHT,
+    configure_ttk,
+    get_system_theme,
+    set_titlebar_theme,
+)
 
 
 HISTORY_LOG_FILE = "history.log"
+
+# 界面主题选项：(显示文本, 配置值)
+THEME_MODE_OPTIONS = (("跟随系统", "system"), ("深色模式", "dark"), ("浅色模式", "light"))
+# 跟随系统模式下轮询系统主题变化的间隔（Windows 无便捷的跨进程主题变更通知）
+SYSTEM_THEME_POLL_MS = 2000
 
 
 # 启用 Windows 高 DPI 支持
@@ -51,8 +65,17 @@ class MonitorBrightnessApp:
         # 拓扑变化后重枚举可能换序，定位句柄必须使用稳定身份
         self.selected_monitor_key: Optional[tuple] = None
 
+        # 当前生效的配色（"light"/"dark"），以及状态栏最近一次的 (文本, 级别)，
+        # 供切换主题时恢复状态栏颜色
+        self.current_theme: Optional[str] = None
+        self._colors = LIGHT_COLORS
+        self._status_state: tuple = ("", None)
+
         # 创建界面
         self.create_widgets()
+
+        # 应用初始主题
+        self._apply_theme()
 
         # 初始日志
         self.log("程序启动", "info")
@@ -62,6 +85,9 @@ class MonitorBrightnessApp:
 
         # 窗口关闭时清理资源
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # 跟随系统模式下轮询系统主题变化
+        self.root.after(SYSTEM_THEME_POLL_MS, self._poll_system_theme)
 
     def on_closing(self):
         """窗口关闭时清理显示器句柄"""
@@ -87,7 +113,12 @@ class MonitorBrightnessApp:
 
     def load_config(self) -> dict:
         """加载配置文件"""
-        default_config = {"brightness": 50, "last_monitor_desc": "", "last_monitor_device": ""}
+        default_config = {
+            "brightness": 50,
+            "last_monitor_desc": "",
+            "last_monitor_device": "",
+            "theme_mode": "system",
+        }
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, "r", encoding="utf-8") as f:
@@ -104,6 +135,78 @@ class MonitorBrightnessApp:
                 json.dump(self.config, f, ensure_ascii=False, indent=2)
         except IOError as e:
             self.log(f"保存配置文件失败：{e}", "error")
+
+    def _apply_theme(self):
+        """根据配置的主题模式应用配色
+
+        mode 为 "system" 时读取 Windows 系统深浅色设置；
+        "dark"/"light" 为手动指定。
+        """
+        mode = self.config.get("theme_mode", "system")
+        if mode == "system":
+            theme = get_system_theme()
+        else:
+            theme = mode
+        if theme not in (THEME_LIGHT, THEME_DARK):
+            theme = THEME_LIGHT
+        self.current_theme = theme
+
+        colors = DARK_COLORS if theme == THEME_DARK else LIGHT_COLORS
+        self._colors = colors
+        configure_ttk(self.root, colors)
+        set_titlebar_theme(self.root, theme)
+
+        # 日志文本框是 Tk 控件，不走 ttk 样式，需单独配色
+        self.log_text.config(
+            background=colors["text_bg"],
+            foreground=colors["text_fg"],
+            insertbackground=colors["fg"],
+            highlightbackground=colors["border"],
+            highlightcolor=colors["accent"],
+        )
+        # 重新配置日志分级颜色，已输出的日志会同步更新
+        for level in ("info", "success", "error", "warning"):
+            self.log_text.tag_config(level, foreground=colors[f"log_{level}"])
+
+        # 下拉框弹出列表按需创建后不会自动更新配色，销毁待下次弹出时重建
+        try:
+            self.root.tk.call("destroy", str(self.monitor_combo) + ".popdown")
+        except tk.TclError:
+            pass
+
+        # 状态栏当前文本恢复对应的级别颜色
+        text, level = self._status_state
+        if level:
+            self.status_label.config(foreground=colors[f"status_{level}"])
+
+    def on_theme_mode_changed(self):
+        """界面主题选项切换时的处理"""
+        mode = self.theme_mode_var.get()
+        self.config["theme_mode"] = mode
+        self.save_config()
+        self._apply_theme()
+        names = dict(THEME_MODE_OPTIONS)
+        self.log(f"界面主题已切换为：{names.get(mode, mode)}", "info")
+
+    def _poll_system_theme(self):
+        """跟随系统模式下轮询系统深浅色设置是否变化"""
+        try:
+            if self.config.get("theme_mode", "system") == "system":
+                system_theme = get_system_theme()
+                if system_theme != self.current_theme:
+                    self._apply_theme()
+                    name = "深色" if system_theme == THEME_DARK else "浅色"
+                    self.log(f"检测到系统主题切换，已跟随切换为{name}界面", "info")
+        finally:
+            self.root.after(SYSTEM_THEME_POLL_MS, self._poll_system_theme)
+
+    def _set_status(self, text: str, level: Optional[str] = None):
+        """设置状态栏文本与颜色（level 为 None 时使用默认前景色）"""
+        self._status_state = (text, level)
+        if level:
+            self.status_label.config(text=text, foreground=self._colors[f"status_{level}"])
+        else:
+            self.status_label.config(text=text, foreground=self._colors["fg"])
 
     def log(self, message: str, level: str = "info"):
         """添加日志到日志窗口"""
@@ -155,7 +258,7 @@ class MonitorBrightnessApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(4, weight=1)
+        main_frame.rowconfigure(5, weight=1)
 
         # 显示器选择区域
         monitor_frame = ttk.LabelFrame(main_frame, text="选择显示器", padding="10")
@@ -220,13 +323,27 @@ class MonitorBrightnessApp:
         auto_btn = ttk.Button(setting_frame, text="智能调节", command=self.auto_adjust_brightness)
         auto_btn.grid(row=0, column=3, padx=(10, 0))
 
+        # 界面主题区域
+        theme_frame = ttk.LabelFrame(main_frame, text="界面主题", padding="10")
+        theme_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+
+        self.theme_mode_var = tk.StringVar(value=self.config.get("theme_mode", "system"))
+        for text, value in THEME_MODE_OPTIONS:
+            ttk.Radiobutton(
+                theme_frame,
+                text=text,
+                value=value,
+                variable=self.theme_mode_var,
+                command=self.on_theme_mode_changed,
+            ).pack(side=tk.LEFT, padx=(0, 15))
+
         # 状态标签
-        self.status_label = ttk.Label(main_frame, text="", foreground="green")
-        self.status_label.grid(row=3, column=0, columnspan=2, pady=(10, 0))
+        self.status_label = ttk.Label(main_frame, text="")
+        self.status_label.grid(row=4, column=0, columnspan=2, pady=(0, 0))
 
         # 日志区域
         log_frame = ttk.LabelFrame(main_frame, text="日志", padding="10")
-        log_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        log_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
@@ -421,11 +538,11 @@ class MonitorBrightnessApp:
         # 应用亮度（句柄失效时自动重新枚举重试）
         success, msg = self.apply_brightness(brightness)
         if success:
-            self.status_label.config(text=f"智能调节亮度为 {brightness}%", foreground="green")
+            self._set_status(f"智能调节亮度为 {brightness}%", "success")
             self.log(f"自动设置亮度：{brightness}%", "success")
             self.query_current_brightness()
         else:
-            self.status_label.config(text="智能调节失败", foreground="red")
+            self._set_status("智能调节失败", "error")
             self.log("自动亮度设置失败", "error")
             self.log(f"  - {self.selected_monitor_desc}: {msg}", "error")
 
@@ -465,11 +582,11 @@ class MonitorBrightnessApp:
             else:
                 percent = 0
             self.brightness_label.config(text=f"{percent}%")
-            self.status_label.config(text=f"范围：{min_val}-{max_val}")
+            self._set_status(f"范围：{min_val}-{max_val}")
             self.log(f"当前亮度：{percent}% (范围：{min_val}-{max_val})", "info")
         else:
             self.brightness_label.config(text="读取失败")
-            self.status_label.config(text="无法读取亮度信息")
+            self._set_status("无法读取亮度信息", "error")
             self.log("无法读取亮度信息", "error")
 
     def save_brightness(self):
@@ -485,14 +602,14 @@ class MonitorBrightnessApp:
         success, msg = self.apply_brightness(brightness)
 
         if success:
-            self.status_label.config(text=f"亮度已设置为 {brightness}%", foreground="green")
+            self._set_status(f"亮度已设置为 {brightness}%", "success")
             self.query_current_brightness()
             self.log(f"亮度设置成功：{brightness}%", "success")
             self.log(f"  - {self.selected_monitor_desc}: {msg}", "success")
             # 记录历史
             self.record_history(brightness, self.selected_monitor_desc)
         else:
-            self.status_label.config(text="设置失败", foreground="red")
+            self._set_status("设置失败", "error")
             self.log("亮度设置失败", "error")
             self.log(f"  - {self.selected_monitor_desc}: {msg}", "error")
 
