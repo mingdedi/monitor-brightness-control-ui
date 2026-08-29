@@ -19,6 +19,20 @@ class PHYSICAL_MONITOR(ctypes.Structure):
     ]
 
 
+CCHDEVICENAME = 32  # Windows SDK：显示设备名固定长度
+
+
+class MONITORINFOEXW(ctypes.Structure):
+    """GetMonitorInfoW 的扩展监视器信息，szDevice 标识显示器所属的显示输出"""
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("rcMonitor", ctypes.wintypes.RECT),
+        ("rcWork", ctypes.wintypes.RECT),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("szDevice", ctypes.wintypes.WCHAR * CCHDEVICENAME),
+    ]
+
+
 class MonitorController:
     """显示器控制器，管理物理显示器句柄的生命周期"""
 
@@ -38,7 +52,9 @@ class MonitorController:
             return True
 
         try:
-            self.dxva2 = ctypes.windll.dxva2
+            # use_last_error=True 使 ctypes 在每次调用后捕获 GetLastError，
+            # 否则 ctypes.get_last_error() 恒为 0，无法用于诊断失败原因
+            self.dxva2 = ctypes.WinDLL("dxva2", use_last_error=True)
             self._setup_functions()
             self._loaded = True
             return True
@@ -113,8 +129,32 @@ class MonitorController:
         ]
         self.DestroyPhysicalMonitors.restype = ctypes.wintypes.BOOL
 
+        # GetMonitorInfoW（user32）：查询 HMONITOR 所属的显示设备名
+        self.GetMonitorInfoW = ctypes.windll.user32.GetMonitorInfoW
+        self.GetMonitorInfoW.argtypes = [
+            ctypes.wintypes.HMONITOR,
+            ctypes.POINTER(MONITORINFOEXW)
+        ]
+        self.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
+
+    def get_monitor_device_name(self, hmonitor) -> str:
+        r"""查询 HMONITOR 对应的显示设备名（如 \\.\DISPLAY1）
+
+        设备名标识物理显示器挂在哪个显示输出上。枚举顺序在拓扑变化后
+        可能改变，描述字符串可能重复（同型号显示器），二者组合才能在
+        重新枚举后唯一定位同一台物理显示器。
+
+        返回:
+            设备名字符串，查询失败时返回空字符串
+        """
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        if self.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+            return info.szDevice
+        return ""
+
     def get_monitor_handles(self) -> list:
-        """获取所有物理显示器的句柄和描述（纯函数，不修改实例状态）"""
+        """获取所有物理显示器的句柄、描述和设备名（纯函数，不修改实例状态）"""
         if not self._loaded and not self.load_dll():
             return []
 
@@ -129,10 +169,12 @@ class MonitorController:
                 return True
             local_array = (PHYSICAL_MONITOR * count)()
             if self.GetPhysicalMonitorsFromHMONITOR(hMonitor, count, local_array):
+                device = self.get_monitor_device_name(hMonitor)
                 for i in range(count):
                     monitors.append({
                         "handle": local_array[i].hPhysicalMonitor,
                         "description": local_array[i].szPhysicalMonitorDescription,
+                        "device": device,
                     })
             return True
 

@@ -47,6 +47,9 @@ class MonitorBrightnessApp:
         # 存储显示器信息
         self.monitors = []
         self.selected_monitor_desc: Optional[str] = None
+        # 稳定身份 (描述, 设备名)：下拉框标签的序号跟随枚举顺序，
+        # 拓扑变化后重枚举可能换序，定位句柄必须使用稳定身份
+        self.selected_monitor_key: Optional[tuple] = None
 
         # 创建界面
         self.create_widgets()
@@ -84,7 +87,7 @@ class MonitorBrightnessApp:
 
     def load_config(self) -> dict:
         """加载配置文件"""
-        default_config = {"brightness": 50, "last_monitor": ""}
+        default_config = {"brightness": 50, "last_monitor_desc": "", "last_monitor_device": ""}
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, "r", encoding="utf-8") as f:
@@ -278,11 +281,13 @@ class MonitorBrightnessApp:
             self.monitor_combo["values"] = ["未检测到支持 DDC/CI 的显示器"]
             self.monitor_var.set("未检测到支持 DDC/CI 的显示器")
             self.selected_monitor_desc = None
+            self.selected_monitor_key = None
             self.brightness_label.config(text="无显示器")
             self.log("所有显示器均不支持 DDC/CI 亮度控制", "warning")
             return
 
-        # 多台显示器描述相同时追加序号，保证下拉框中可区分、按描述匹配时只命中一台
+        # 多台显示器描述相同时追加序号，保证下拉框中可区分；
+        # 选择定位不依赖标签，而依赖（描述, 设备名）稳定身份
         desc_counts = {}
         for m in self.monitors:
             desc_counts[m["description"]] = desc_counts.get(m["description"], 0) + 1
@@ -290,31 +295,91 @@ class MonitorBrightnessApp:
         for m in self.monitors:
             if desc_counts[m["description"]] > 1:
                 seen_counts[m["description"]] = seen_counts.get(m["description"], 0) + 1
-                m["description"] = f"{m['description']} #{seen_counts[m['description']]}"
+                m["label"] = f"{m['description']} #{seen_counts[m['description']]}"
+            else:
+                m["label"] = m["description"]
 
         # 更新下拉框
-        monitor_descriptions = [m["description"] for m in self.monitors]
-        self.monitor_combo["values"] = monitor_descriptions
+        monitor_labels = [m["label"] for m in self.monitors]
+        self.monitor_combo["values"] = monitor_labels
         self.log(f"检测到 {len(self.monitors)} 个显示器", "info")
 
-        # 恢复上次选择的显示器
-        last_monitor = self.config.get("last_monitor", "")
-        if last_monitor in monitor_descriptions:
-            self.monitor_var.set(last_monitor)
-            self.selected_monitor_desc = last_monitor
-        else:
-            self.monitor_var.set(monitor_descriptions[0])
-            self.selected_monitor_desc = monitor_descriptions[0]
+        # 恢复选择：优先按重枚举前的稳定身份找回同一台物理显示器
+        # （枚举顺序变化不影响定位），首次启动按配置文件恢复
+        prior_key = self.selected_monitor_key
+        selected = None
+        if prior_key is not None:
+            selected = self._locate_monitor(prior_key)
+            if selected is None:
+                self.log("之前的显示器未在本次枚举中找到（可能已断开），已切换选择", "warning")
+        if selected is None:
+            selected = self._restore_selection()
+        if selected is None:
+            selected = self.monitors[0]
+        self._set_selected_monitor(selected, save_config=False)
 
         # 查询当前亮度
         self.query_current_brightness()
+
+    def _locate_monitor(self, identity: tuple) -> Optional[dict]:
+        """按（描述, 设备名）身份在当前列表中定位显示器
+
+        设备名在拓扑变化后可能重新编号，此时退回按描述匹配，
+        仅当描述能唯一命中时才认定是同一台物理显示器。
+
+        返回:
+            匹配的显示器字典，无法唯一定位时返回 None
+        """
+        desc, device = identity
+        for monitor in self.monitors:
+            if monitor["description"] == desc and monitor["device"] == device:
+                return monitor
+        matches = [m for m in self.monitors if m["description"] == desc]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    def _restore_selection(self) -> Optional[dict]:
+        """首次启动时按配置文件恢复上次选择的显示器，找不到返回 None"""
+        target_desc = self.config.get("last_monitor_desc", "")
+        target_device = self.config.get("last_monitor_device", "")
+        if target_desc:
+            selected = self._locate_monitor((target_desc, target_device))
+            if selected is not None:
+                return selected
+            matches = [m for m in self.monitors if m["description"] == target_desc]
+            if len(matches) > 1:
+                self.log(
+                    f"有 {len(matches)} 台描述相同的显示器且设备名未匹配，无法恢复上次选择",
+                    "warning"
+                )
+
+        # 兼容旧版配置（纯标签字符串）
+        legacy_label = self.config.get("last_monitor", "")
+        if legacy_label:
+            for m in self.monitors:
+                if m["label"] == legacy_label:
+                    return m
+        return None
+
+    def _set_selected_monitor(self, monitor: dict, save_config: bool):
+        """记录当前选中的显示器，同时保存（描述, 设备名）稳定身份"""
+        self.selected_monitor_desc = monitor["label"]
+        self.selected_monitor_key = (monitor["description"], monitor["device"])
+        self.monitor_var.set(monitor["label"])
+        if save_config:
+            self.config["last_monitor_desc"] = monitor["description"]
+            self.config["last_monitor_device"] = monitor["device"]
+            self.config.pop("last_monitor", None)  # 迁移旧版配置键
+            self.save_config()
 
     def apply_brightness(self, brightness: int) -> tuple:
         """
         应用亮度到选中的显示器
 
         显示拓扑变化（如合盖关闭内屏、插拔显示器）会使已持有的句柄失效，
-        此时重新枚举显示器并重试一次。
+        此时重新枚举显示器并重试一次。重试前先确认原显示器仍能被唯一定位，
+        避免把亮度误设到其他显示器上。
 
         返回:
             tuple: (成功标志，消息)
@@ -327,7 +392,11 @@ class MonitorBrightnessApp:
             self.log(f"  - {self.selected_monitor_desc}: {msg}", "error")
 
         self.log("显示器句柄可能已失效，重新枚举后重试", "warning")
+        identity = self.selected_monitor_key
         self.refresh_monitors()
+        if identity is not None and self._locate_monitor(identity) is None:
+            self.log("原显示器已不在显示器列表中（可能已断开或被禁用），取消重试", "error")
+            return False, "原显示器已断开或不可用"
         handle = self.get_selected_monitor_handle()
         if handle is None:
             return False, "未找到可用的显示器句柄"
@@ -362,18 +431,22 @@ class MonitorBrightnessApp:
 
     def on_monitor_selected(self, event):
         """显示器选择变化时的处理"""
-        self.selected_monitor_desc = self.monitor_var.get()
-        self.config["last_monitor"] = self.selected_monitor_desc
-        self.save_config()
-        self.log(f"选择显示器：{self.selected_monitor_desc}", "info")
-        self.query_current_brightness()
+        label = self.monitor_var.get()
+        for monitor in self.monitors:
+            if monitor["label"] == label:
+                self._set_selected_monitor(monitor, save_config=True)
+                self.log(f"选择显示器：{label}", "info")
+                self.query_current_brightness()
+                return
+        self.log(f"未找到显示器 '{label}'，忽略本次选择", "warning")
 
     def get_selected_monitor_handle(self):
-        """获取选中显示器的句柄"""
-        if not self.selected_monitor_desc:
+        """获取选中显示器的句柄（按稳定身份匹配，枚举顺序变化不影响定位）"""
+        if self.selected_monitor_key is None:
             return None
+        desc, device = self.selected_monitor_key
         for monitor in self.monitors:
-            if monitor["description"] == self.selected_monitor_desc:
+            if monitor["description"] == desc and monitor["device"] == device:
                 return monitor["handle"]
         return None
 
